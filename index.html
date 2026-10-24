@@ -239,12 +239,19 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
         <button type="button" id="bRun" aria-pressed="true">RUN</button>
         <button type="button" id="bStop" aria-pressed="false">STOP</button>
       </div>
-      <button type="button" class="btn" id="bStep" disabled title="STOP 상태에서 한 스캔만 실행합니다. 타이머는 0.1초씩 진행합니다.">1스캔</button>
+      <button type="button" class="btn" id="bStep" disabled title="정지 상태에서 래더를 한 번 실행합니다.">한 번 실행</button>
       <button type="button" class="btn" id="bReset">초기화</button>
       <select class="pick" id="exSel" aria-label="예제 불러오기"></select>
       <output class="scan"><span class="led" id="led"></span><span id="scanCnt">SCAN 0</span></output>
     </div>
   </header>
+
+  <section class="quickstart" aria-label="빠른 시작 안내">
+    <strong>빠른 시작</strong>
+    <span><b>1</b> 예제를 고르거나 행을 추가하세요</span>
+    <span><b>2</b> 접점을 선택해 명령어를 입력하세요</span>
+    <span><b>3</b> 입력 X를 눌러 예상 결과를 확인하세요</span>
+  </section>
 
   <div class="ctl" role="group" aria-label="프로그램 저장">
     <button type="button" class="btn" id="bSave" title="래더 프로그램을 .json 파일로 저장합니다">파일로 저장</button>
@@ -268,10 +275,10 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
       <li><b>이동·수정</b> 방향키로 커서를 옮기고, 접점 위에서 Enter(또는 더블클릭)를 누르면 입력 창에 명령어가 채워져 그 자리를 수정합니다. <kbd>Delete</kbd> 삭제, <kbd>⌘/Ctrl</kbd> + <kbd>Backspace</kbd> 현재 행 삭제. 커서가 래더 위에 있을 때 영문자를 치면 입력 창이 열립니다.</li>
       <li><b>되돌리기</b> <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd>로 되돌리고, <kbd>⌘/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd>(또는 <kbd>Ctrl</kbd> + <kbd>Y</kbd>)로 다시 실행합니다. 입력 창이 비어 있을 때도 동작합니다.</li>
       <li><b>저장</b> 편집 내용은 이 브라우저에 자동 저장됩니다. “파일로 저장”으로 .json 파일을 보관하고 “파일 열기”로 다시 불러올 수 있습니다.</li>
-      <li><b>RUN</b> 상태에서 오른쪽 X 입력을 조작하면 래더 위로 초록색 전류가 흐릅니다. 초록색이 켜진 접점이 닫힌 접점입니다.</li>
+      <li><b>입력 X</b>를 조작하면 래더와 “1회 실행 예상 타이밍”이 바로 갱신됩니다. 초록색이 켜진 접점은 닫힌 접점입니다.</li>
       <li><b>유지</b>는 누를 때마다 ON/OFF가 바뀌는 스위치, <b>푸시</b>는 누르는 동안만 ON인 버튼입니다. 입력 아래 버튼으로 바꿉니다.</li>
       <li>접점이나 코일을 클릭해 선택하고, “수정” 버튼이나 Enter로 입력 창을 엽니다. 타이머 설정값도 <kbd>OUT T0 K30</kbd>처럼 이 창에서 바꿉니다.</li>
-      <li>프로그램은 50ms마다 위에서 아래로 한 번씩 실행(스캔)됩니다. <b>STOP</b>에서는 출력이 모두 꺼지고, 1스캔으로 한 단계씩 실행해 볼 수 있습니다.</li>
+      <li>프로그램은 50ms마다 위에서 아래로 실행됩니다. <b>STOP</b>을 누른 뒤 “한 번 실행”을 누르면 스캔을 한 단계 진행합니다.</li>
       <li>a접점(NO)은 신호가 ON일 때 닫히고, b접점(NC)은 신호가 OFF일 때 닫힙니다. 타이머 설정값은 0.1초 단위입니다.</li>
     </ul>
   </details>
@@ -313,25 +320,17 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
     </section>
   </main>
 
-  <section class="panel" aria-label="타이밍 차트">
+  <section class="panel" aria-label="1회 실행 예상 타이밍">
     <div class="ph">
-      <h2>타이밍 차트</h2>
-      <div class="cctl">
-        <div class="seg" role="group" aria-label="차트 종류">
-          <button type="button" id="tabT" aria-pressed="true">시간 흐름</button>
-          <button type="button" id="tabS" aria-pressed="false">1스캔 실행 순서</button>
-        </div>
-        <label class="fld" id="fldStep">한 칸<select id="selStep" aria-label="한 칸의 시간"><option value="100">0.1초</option><option value="200">0.2초</option><option value="500">0.5초</option><option value="1000">1초</option></select></label>
-        <label class="fld" id="fldScan" hidden>스캔 번호<select id="selScan" aria-label="실행 순서를 볼 스캔 번호"></select></label>
-        <button type="button" class="btn sm" id="bClrX">입력 지우기</button>
-      </div>
+      <h2>1회 실행 예상 타이밍</h2>
+      <span class="sub">현재 입력 기준 · 다음 스캔 미리보기</span>
     </div>
     <p class="curline" id="chartHint"></p>
     <div class="cwrap">
-      <canvas id="cv" role="img" aria-label="입력 파형에 따른 신호의 ON/OFF 변화"></canvas>
-      <p class="empty" id="chartEmpty" hidden>래더에 접점이나 코일을 추가하면 신호 변화가 여기에 그려집니다.</p>
+      <canvas id="cv" role="img" aria-label="현재 입력 상태에서 다음 한 번의 래더 스캔 후 신호가 바뀌는 예상"></canvas>
+      <p class="empty" id="chartEmpty" hidden>접점과 코일을 추가하면 다음 스캔의 신호 변화를 보여 줍니다.</p>
     </div>
-    <div class="legend foot"><span><i style="background:var(--in)"></i>입력 (클릭·드래그로 그리기)</span><span><i style="background:var(--warn)"></i>내부·타이머·카운터</span><span><i style="background:var(--live)"></i>출력</span></div>
+    <div class="legend foot"><span><i style="background:var(--in)"></i>입력 X</span><span><i style="background:var(--warn)"></i>내부·타이머·카운터</span><span><i style="background:var(--live)"></i>출력</span><span>왼쪽부터 위에서 아래 순서로 실행</span></div>
   </section>
 
   <section class="panel" aria-label="명령어 리스트">

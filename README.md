@@ -1,6 +1,6 @@
 # PLC 래더 시뮬레이터
 
-React + TypeScript + Vite로 빌드하며 GitHub Pages에 배포합니다.
+React + TypeScript + MUI + Vite로 빌드하며 GitHub Pages에 배포합니다.
 
 ## 비밀번호 설정
 

@@ -1,18 +1,28 @@
+// @ts-nocheck
+// The renderer still uses dynamic DOM templates; its model types are being migrated incrementally.
 (function(){
 'use strict';
-const $=id=>document.getElementById(id);
+type Contact={t:'NO'|'NC';a:string;_v?:boolean};
+type Output={t:'OUT'|'SET'|'RST'|'TON'|'CTU';a:string;p:number};
+type Branch={to:number;cs:Contact[];_v?:boolean;_in?:boolean[]};
+type Rung={note:string;cols:Contact[][];br?:Branch[];out?:Output|null;_prev?:boolean;_e?:boolean[];_eo?:boolean[];_cond?:boolean;_ui?:any};
+type ScanConfig={step:number;X:Record<string,string>};
+type Program={rungs:Rung[];tags:Record<string,string>;xmode:('push'|'toggle')[];scn:ScanConfig};
+type Selection={k:'c';r:number;ci:number;ki:number}|{k:'b';r:number;bi:number;ki:number}|{k:'o';r:number}|null;
+type RuntimeState={run:boolean;live:boolean;scans:number;t:number;X:boolean[];xs:boolean[];bits:Record<string,boolean>;acc:Record<string,number>;cnt:Record<string,number>;sel:Selection;pt:number[];hold:boolean[]};
+type Example={name:string;tags:Record<string,string>;xmode:('push'|'toggle')[];rungs:Rung[];scn:ScanConfig};
+const $=(id:string):any=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 const GROUPS=[['X','입력',8],['Y','출력',8],['M','내부 릴레이',8],['T','타이머',4],['C','카운터',4]];
-const GN={X:8,Y:8,M:8,T:4,C:4};
-const OUT_ALLOWED={OUT:'YM',SET:'YM',RST:'YMTC',TON:'T',CTU:'C'};
+const GN:Record<string,number>={X:8,Y:8,M:8,T:4,C:4};
+const OUT_ALLOWED:Record<string,string>={OUT:'YM',SET:'YM',RST:'YMTC',TON:'T',CTU:'C'};
 const MAXR=40;
 const NCOL=40;
 
 /*ENGINE*/
-const WIN=20;
-let prog={rungs:[],tags:{},xmode:[]};
-const ST={run:true,live:false,scans:0,t:0,X:Array(8).fill(false),xs:Array(8).fill(false),bits:{},acc:{},cnt:{},sel:null,pt:[],hold:[]};
-let SIGS=[],HIST=[];
+let prog:Program={rungs:[],tags:{},xmode:[],scn:{step:500,X:{}}};
+const ST:RuntimeState={run:true,live:false,scans:0,t:0,X:Array(8).fill(false),xs:Array(8).fill(false),bits:{},acc:{},cnt:{},sel:null,pt:[],hold:[]};
+let SIGS:string[]=[],HIST:{t:number;n:number;b:boolean[]}[]=[];
 function read(a){const g=a[0],n=+a.slice(1);if(g==='X')return !!ST.xs[n];return !!ST.bits[a];}
 function applyOut(r,dt){
   const o=r.out;if(!o)return;
@@ -66,7 +76,7 @@ function runtimeReset(keepX){
 const k=(t,a)=>({t,a});
 const mkX=o=>{const a=Array(8).fill('toggle');for(const i in o)a[+i]=o[i];return a;};
 const pls=(...r)=>{const a=Array(NCOL).fill('0');for(const [x,y] of r)for(let i=x;i<y&&i<NCOL;i++)a[i]='1';return a.join('');};
-const EXAMPLES={
+const EXAMPLES:Record<string,Example>={
   selfhold:{name:'자기유지 (시작/정지)',tags:{X0:'시작',X1:'정지',Y0:'모터',Y1:'정지등'},xmode:mkX({0:'push',1:'push'}),rungs:[
     {note:'시작을 눌렀다 놓아도 Y0가 유지되고, 정지를 누르면 꺼집니다',cols:[[k('NO','X0'),k('NO','Y0')],[k('NC','X1')]],out:{t:'OUT',a:'Y0',p:0}},
     {note:'모터가 꺼져 있을 때 정지등 점등',cols:[[k('NC','Y0')]],out:{t:'OUT',a:'Y1',p:0}}],scn:{step:500,X:{X0:pls([4,6],[28,30]),X1:pls([20,22])}}},
@@ -401,12 +411,13 @@ function updateIO(){
   IO.x.forEach((el,i)=>{const on=ST.X[i];el.classList.toggle('on',on);el.setAttribute('aria-pressed',on?'true':'false');});
   IO.y.forEach((el,i)=>el.classList.toggle('on',!!ST.bits['Y'+i]));
   IO.m.forEach((el,i)=>el.classList.toggle('on',!!ST.bits['M'+i]));
+  chartDirty=true;
 }
-function press(i){ST.hold[i]=true;ST.X[i]=true;ST.pt[i]=performance.now();updateIO();}
+function press(i){ST.hold[i]=true;ST.X[i]=true;ST.pt[i]=performance.now();updateIO();refresh();}
 function release(i){
   if(!ST.hold[i])return;ST.hold[i]=false;
   const wait=Math.max(0,120-(performance.now()-ST.pt[i]));
-  setTimeout(()=>{if(!ST.hold[i]){ST.X[i]=false;updateIO();}},wait);
+  setTimeout(()=>{if(!ST.hold[i]){ST.X[i]=false;updateIO();refresh();}},wait);
 }
 const xin=$('xin');
 xin.addEventListener('pointerdown',e=>{
@@ -432,12 +443,12 @@ xin.addEventListener('click',e=>{
   const m=e.target.closest('.mode');
   if(m){
     const i=+m.dataset.i;prog.xmode[i]=prog.xmode[i]==='push'?'toggle':'push';
-    ST.X[i]=false;ST.hold[i]=false;save();renderIO();updateIO();return;
+    ST.X[i]=false;ST.hold[i]=false;save();renderIO();refresh();return;
   }
   const b=e.target.closest('.xin');if(!b)return;
   const i=+b.dataset.i;
   if(prog.xmode[i]==='push')return;
-  ST.X[i]=!ST.X[i];updateIO();
+  ST.X[i]=!ST.X[i];updateIO();refresh();
 });
 
 /* ---------- timers & counters panel ---------- */
@@ -466,15 +477,14 @@ function updateMem(){
   });
 }
 
-/* ---------- timing chart ---------- */
+/* ---------- one-scan preview chart ---------- */
 function buildSignals(){
   const set=new Set();
   prog.rungs.forEach(r=>{r.cols.forEach(col=>col.forEach(c=>set.add(c.a)));(r.br||[]).forEach(b=>b.cs.forEach(c=>set.add(c.a)));if(r.out)set.add(r.out.a);});
   const ord='XMTCY';
   SIGS=[...set].sort((a,b)=>ord.indexOf(a[0])-ord.indexOf(b[0])||(+a.slice(1))-(+b.slice(1)));
 }
-/* ---------- 타이밍 차트 ---------- */
-let chartDirty=true,chartTab='time',chartScan=1,CH=null,paint=null;
+let chartDirty=true;
 function snapState(){
   const sv={bits:Object.assign({},ST.bits),acc:Object.assign({},ST.acc),cnt:Object.assign({},ST.cnt),xs:ST.xs.slice(),X:ST.X.slice(),t:ST.t,scans:ST.scans,live:ST.live};
   const rs=prog.rungs.map(r=>({prev:r._prev,e:r._e,eo:r._eo,cond:r._cond,
@@ -490,7 +500,7 @@ function snapState(){
     });
   };
 }
-/* 현재 상태에서 1스캔을 미리 계산하며, 렁이 끝날 때마다 신호 상태를 기록한다 */
+/* 현재 X 입력과 내부 상태를 보존한 채 다음 스캔을 계산해 렁마다 신호 상태를 기록 */
 function traceScan(dt){
   const start=SIGS.map(a=>a[0]==='X'?!!ST.X[+a.slice(1)]:!!ST.bits[a]);
   const rest=snapState();
@@ -500,163 +510,56 @@ function traceScan(dt){
   }finally{rest();}
   return {start,steps,conds};
 }
-const scnStep=()=>(prog.scn&&prog.scn.step)||500;
-function scnRaw(a){return (prog.scn&&prog.scn.X&&prog.scn.X[a])||'';}
-function scnGet(a,k){return scnRaw(a)[k]==='1';}
-function scnSet(a,k,v){
-  if(!prog.scn)prog.scn={step:500,X:{}};
-  const t=scnRaw(a).padEnd(NCOL,'0').split('');
-  t[k]=v?'1':'0';prog.scn.X[a]=t.join('');
-}
-/* 리셋 상태에서 시작해 입력 파형대로 NCOL번 스캔한 결과. traceAt번째 스캔의 내부 실행 순서도 함께 돌려준다 */
-function runScenario(dt,traceAt){
-  const rest=snapState();
-  const cols=[];let tr=null;
-  try{
-    ST.bits={};ST.acc={};ST.cnt={};ST.t=0;
-    prog.rungs.forEach(r=>{r._prev=false;});
-    for(let k=0;k<NCOL;k++){
-      for(let i=0;i<8;i++)ST.X[i]=scnGet('X'+i,k);
-      if(k===traceAt)tr=traceScan(dt);
-      runScan(dt,true);
-      cols.push(SIGS.map(a=>read(a)));
-    }
-  }finally{rest();}
-  return {cols,tr};
-}
-function fmtT(ms){return (+(ms/1000).toFixed(1))+'s';}
 function chartHintText(){
-  const st=fmtT(scnStep());
-  return chartTab==='time'
-    ?`파란 입력 줄을 클릭하거나 끌어서 ON/OFF를 그립니다. 리셋 상태에서 시작해 한 칸마다 1스캔(${st})씩 실행한 결과이며, RUN/STOP과 관계없이 래더만으로 계산됩니다.`
-    :`위쪽 “시간 흐름” 차트에서 그린 입력으로, ${chartScan}번째 스캔(${fmtT((chartScan-1)*scnStep())}) 동안 렁이 위에서 아래로 실행되며 신호가 바뀌는 순서입니다.`;
+  return '현재 X 입력 상태를 기준으로 다음 1회 스캔을 미리 계산합니다. 신호 변화는 래더를 위에서 아래로 실행하는 순서로 표시됩니다.';
 }
 function drawChart(){
   const cv=$('cv'),wrap=cv.parentElement,n=SIGS.length;
   $('chartEmpty').hidden=n>0;cv.hidden=n===0;
   $('chartHint').textContent=chartHintText();
-  if(!n){CH=null;return;}
-  const dt=scnStep(),time=chartTab==='time';
-  const sim=runScenario(dt,time?-1:Math.max(0,Math.min(NCOL-1,chartScan-1)));
-  const dpr=window.devicePixelRatio||1,avail=Math.max(260,wrap.clientWidth-28);
-  const R=prog.rungs.length;
-  const slots=time?NCOL:R+2;
-  const rowH=36,top=time?36:56,left=avail<520?96:136,right=12;
-  const minSlot=time?22:52;
-  const w=Math.max(avail,left+slots*minSlot+right),h=top+n*rowH+8;
+  if(!n)return;
+  const sim=traceScan(50),dpr=window.devicePixelRatio||1,avail=Math.max(260,wrap.clientWidth-28);
+  const R=prog.rungs.length,slots=R+2,rowH=38,top=58,left=avail<520?104:142,right=12;
+  const minSlot=70,w=Math.max(avail,left+slots*minSlot+right),h=top+n*rowH+8;
   if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){
     cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);cv.style.width=w+'px';cv.style.height=h+'px';
   }
-  cv.style.touchAction=(w>avail)?'pan-x pan-y':'none';
-  const ctx=cv.getContext('2d');
+  cv.style.touchAction='pan-x pan-y';
+  const ctx=cv.getContext('2d');if(!ctx)return;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
-  const cs=getComputedStyle(document.documentElement),tok=n=>cs.getPropertyValue(n).trim();
-  const cLine=tok('--line'),cInk=tok('--ink'),cInk2=tok('--ink-2'),cLive=tok('--live'),cSel=tok('--sel'),cBg2=tok('--panel-2');
+  const cs=getComputedStyle(document.documentElement),tok=name=>cs.getPropertyValue(name).trim();
+  const cLine=tok('--line'),cInk=tok('--ink'),cInk2=tok('--ink-2'),cLive=tok('--live'),cSel=tok('--sel');
   const cX={X:tok('--in'),Y:tok('--live'),M:tok('--warn'),T:tok('--warn'),C:tok('--warn')};
-  const mono=tok('--mono'),sans=tok('--sans');
-  const x0=left,x1=w-right,cw=(x1-x0)/slots,sx=s=>x0+s*cw;
-  CH={top,rowH,left,cw,N:slots,time};
-  /* 입력 줄 배경 */
-  SIGS.forEach((a,i)=>{if(time&&a[0]==='X'){ctx.fillStyle=cBg2;ctx.fillRect(x0,top+i*rowH,x1-x0,rowH);}});
-  /* 칸 경계선 */
-  const every=time?Math.max(1,Math.ceil(46/cw)):1;
+  const mono=tok('--mono'),sans=tok('--sans'),x0=left,x1=w-right,cw=(x1-x0)/slots,sx=slot=>x0+slot*cw;
   for(let k=0;k<=slots;k++){
-    const x=Math.round(sx(k))+.5,major=!time||k%every===0;
-    ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.globalAlpha=major?1:.45;
-    ctx.beginPath();ctx.moveTo(x,top-(major?10:4));ctx.lineTo(x,h-4);ctx.stroke();
+    const x=Math.round(sx(k))+.5;ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,top-12);ctx.lineTo(x,h-4);ctx.stroke();
   }
-  ctx.globalAlpha=1;
   ctx.textBaseline='alphabetic';ctx.textAlign='center';
-  if(time){
-    ctx.font='500 11px '+mono;ctx.fillStyle=cInk2;
-    for(let k=0;k<NCOL;k+=every){ctx.textAlign='left';ctx.fillText(fmtT(k*dt),sx(k)+3,top-14);}
-  }else{
-    const tr=sim.tr;
-    const head=(sl,l1,l2,on)=>{
-      const cx=sx(sl)+cw/2;ctx.textAlign='center';
-      ctx.font=(on?'700':'600')+' 13px '+mono;ctx.fillStyle=on?cLive:cInk;ctx.fillText(l1,cx,22,cw-4);
-      ctx.font='400 11px '+mono;ctx.fillStyle=cInk2;ctx.fillText(l2,cx,40,cw-4);
-    };
-    head(0,'시작','입력 읽기',false);
-    prog.rungs.forEach((r,i)=>head(i+1,'R'+(i+1),r.out?r.out.a:'-',tr&&tr.conds[i]));
-    head(R+1,'END','출력 갱신',false);
-  }
+  const heading=(slot,title,sub,active)=>{
+    const cx=sx(slot)+cw/2;ctx.textAlign='center';ctx.font=(active?'700':'600')+' 13px '+mono;ctx.fillStyle=active?cLive:cInk;ctx.fillText(title,cx,22,cw-4);
+    ctx.font='400 11px '+sans;ctx.fillStyle=cInk2;ctx.fillText(sub,cx,42,cw-4);
+  };
+  heading(0,'시작','현재 상태',false);
+  prog.rungs.forEach((r,i)=>heading(i+1,'R'+(i+1),r.out?r.out.a:'조건 확인',!!sim.conds[i]));
+  heading(R+1,'예상','1스캔 후',false);
   SIGS.forEach((a,i)=>{
-    const y0=top+i*rowH,hi=y0+8,lo=y0+rowH-9;
+    const y0=top+i*rowH,hi=y0+9,lo=y0+rowH-9;
     ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,y0+rowH-.5);ctx.lineTo(w,y0+rowH-.5);ctx.stroke();
     ctx.textAlign='left';ctx.fillStyle=cInk;ctx.font='600 14px '+mono;ctx.fillText(a,8,y0+rowH/2+5);
-    const tg=prog.tags[a];
-    if(tg){ctx.fillStyle=cInk2;ctx.font='400 12px '+sans;ctx.fillText(tg,40,y0+rowH/2+5,left-48);}
-    let L;
-    if(time)L=sim.cols.map(c=>c[i]);
-    else{L=[sim.tr.start[i]];sim.tr.steps.forEach(s=>L.push(s[i]));L.push(L[L.length-1]);}
-    ctx.strokeStyle=cX[a[0]];ctx.lineWidth=2.5;ctx.lineJoin='miter';
-    ctx.beginPath();
-    L.forEach((v,k)=>{
-      const y=v?hi:lo,xa=sx(k),xb=sx(k+1);
-      if(k===0)ctx.moveTo(xa,y);else{ctx.lineTo(xa,L[k-1]?hi:lo);ctx.lineTo(xa,y);}
+    const tag=prog.tags[a];if(tag){ctx.fillStyle=cInk2;ctx.font='400 12px '+sans;ctx.fillText(tag,40,y0+rowH/2+5,left-48);}
+    const last=sim.steps.length?sim.steps[sim.steps.length-1][i]:sim.start[i];
+    const values=[sim.start[i],...sim.steps.map(step=>step[i]),last];
+    ctx.strokeStyle=cX[a[0]];ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.beginPath();
+    values.forEach((value,k)=>{
+      const y=value?hi:lo,xa=sx(k),xb=sx(k+1);
+      if(k===0)ctx.moveTo(xa,y);else{ctx.lineTo(xa,values[k-1]?hi:lo);ctx.lineTo(xa,y);}
       ctx.lineTo(xb,y);
     });
-    ctx.stroke();
-    if(!time){
-      ctx.fillStyle=cSel;
-      for(let k=1;k<L.length;k++)if(L[k]!==L[k-1]){ctx.beginPath();ctx.arc(sx(k),L[k]?hi:lo,3.5,0,Math.PI*2);ctx.fill();}
-    }
+    ctx.stroke();ctx.fillStyle=cSel;
+    for(let k=1;k<values.length;k++)if(values[k]!==values[k-1]){ctx.beginPath();ctx.arc(sx(k),values[k]?hi:lo,3.5,0,Math.PI*2);ctx.fill();}
   });
 }
-/* 입력 줄 클릭·드래그 */
-function chartCell(e,rowFix){
-  if(!CH||!CH.time)return null;
-  const r=$('cv').getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
-  const row=rowFix!=null?rowFix:Math.floor((y-CH.top)/CH.rowH);
-  if(row<0||row>=SIGS.length||SIGS[row][0]!=='X'||x<CH.left)return null;
-  return {row,a:SIGS[row],k:Math.max(0,Math.min(CH.N-1,Math.floor((x-CH.left)/CH.cw)))};
-}
-(function(){
-  const cv=$('cv');
-  cv.addEventListener('pointerdown',e=>{
-    const c=chartCell(e);if(!c)return;
-    e.preventDefault();
-    try{cv.setPointerCapture(e.pointerId);}catch(_){}
-    paint={row:c.row,val:!scnGet(c.a,c.k)};
-    scnSet(c.a,c.k,paint.val);drawChart();
-  });
-  cv.addEventListener('pointermove',e=>{
-    if(paint){
-      const c=chartCell(e,paint.row);
-      if(c&&scnGet(c.a,c.k)!==paint.val){scnSet(c.a,c.k,paint.val);drawChart();}
-      return;
-    }
-    cv.style.cursor=chartCell(e)?'pointer':'default';
-  });
-  const end=()=>{if(paint){paint=null;save();}};
-  cv.addEventListener('pointerup',end);
-  cv.addEventListener('pointercancel',end);
-  function setTab(t){
-    chartTab=t;
-    $('tabT').setAttribute('aria-pressed',t==='time'?'true':'false');
-    $('tabS').setAttribute('aria-pressed',t==='scan'?'true':'false');
-    $('fldStep').hidden=t!=='time';
-    $('fldScan').hidden=t!=='scan';
-    $('bClrX').hidden=t!=='time';
-    drawChart();
-  }
-  $('tabT').addEventListener('click',()=>setTab('time'));
-  $('tabS').addEventListener('click',()=>setTab('scan'));
-  const ss=$('selScan');
-  ss.innerHTML=Array.from({length:NCOL},(_,i)=>`<option value="${i+1}">${i+1}번째</option>`).join('');
-  ss.addEventListener('change',()=>{chartScan=+ss.value;drawChart();});
-  $('selStep').addEventListener('change',e=>{
-    if(!prog.scn)prog.scn={step:500,X:{}};
-    prog.scn.step=+e.target.value;save();drawChart();
-  });
-  $('bClrX').addEventListener('click',()=>{
-    if(!prog.scn)prog.scn={step:500,X:{}};
-    prog.scn.X={};save();drawChart();
-  });
-  try{window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>drawChart());}catch(_){}
-  try{new MutationObserver(()=>drawChart()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}catch(_){}
-})();
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>drawChart());
 
 /* ---------- commit / refresh ---------- */
 function refresh(){
@@ -666,7 +569,6 @@ function refresh(){
 }
 function commit(reset){
   chartDirty=true;
-  if($('selStep'))$('selStep').value=String(scnStep());
   prog.rungs.forEach(normBr);
   record();
   if(reset!==false)runtimeReset(true);
