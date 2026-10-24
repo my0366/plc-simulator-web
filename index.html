@@ -86,9 +86,13 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .ph h2{margin:0;font-size:14px;font-weight:600}
 .ph .sub{color:var(--ink-2);font-size:12px}
 @media (min-width:980px){
-  .grid{grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"ladder io"}
+  .grid{grid-template-columns:minmax(180px,220px) minmax(0,1fr);grid-template-areas:"inputs ladder" "outputs outputs"}
   .ladder{grid-area:ladder}
-  .io{grid-area:io;position:sticky;top:12px}
+  .inputs{grid-area:inputs}
+  .outputs{grid-area:outputs}
+}
+@media (min-width:1280px){
+  .grid{grid-template-columns:minmax(180px,220px) minmax(0,1fr) minmax(210px,260px);grid-template-areas:"inputs ladder outputs"}
 }
 
 /* io panel */
@@ -126,6 +130,10 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .mr.done .bar i{background:var(--live)}
 .mr .v{text-align:right;color:var(--ink-2);font-variant-numeric:tabular-nums}
 .mr.done .v{color:var(--ink)}
+.memory-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px;padding:16px 20px 20px}
+.mem-group{min-width:0;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel-2)}
+.mem-group .lbl{margin-bottom:16px}
+.mem-group #mem{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 18px}
 
 /* ladder */
 .editor{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;min-height:52px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel-2)}
@@ -229,6 +237,11 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
 .dbtns{display:flex;justify-content:flex-end;gap:8px}
 .btn.pri{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .btn.pri:hover:not(:disabled){background:var(--ink);opacity:.88}
+#chartDialog{width:min(1120px,calc(100vw - 28px));max-height:min(92dvh,1000px);margin:auto;padding:0;overflow:auto;border:1px solid var(--line);border-radius:22px;background:var(--bg)}
+#chartDialog::backdrop{background:rgba(18,25,35,.46);backdrop-filter:blur(5px)}
+#chartDialog .panel{border:0;border-radius:22px;box-shadow:none}
+#chartDialog .ph{position:sticky;top:0;z-index:2;background:var(--panel);}
+#chartDialog .chart-subtitle{flex:1 1 220px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 <title>PLC 래더 시뮬레이터</title>
@@ -247,6 +260,7 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
         <button type="button" id="bRun" aria-pressed="true">RUN</button>
         <button type="button" id="bStop" aria-pressed="false">STOP</button>
       </div>
+      <button type="button" class="btn pri" id="bChart" aria-haspopup="dialog" aria-controls="chartDialog">타임차트 보기</button>
       <button type="button" class="btn" id="bStep" disabled title="정지 상태에서 래더를 한 번 실행합니다.">한 번 실행</button>
       <button type="button" class="btn" id="bReset">초기화</button>
       <select class="pick" id="exSel" aria-label="예제 불러오기"></select>
@@ -258,7 +272,7 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
     <strong>빠른 시작</strong>
     <span><b>1</b> 예제를 고르거나 행을 추가하세요</span>
     <span><b>2</b> 접점을 선택해 명령어를 입력하세요</span>
-    <span><b>3</b> 입력 X를 눌러 예상 결과를 확인하세요</span>
+    <span><b>3</b> 타임차트 보기에서 입력 순서와 결과를 확인하세요</span>
   </section>
 
   <div class="ctl" role="group" aria-label="프로그램 저장">
@@ -293,25 +307,10 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
   </details>
 
   <main class="grid">
-    <section class="panel io" aria-label="입출력 패널">
-      <div class="sec">
-        <p class="lbl">입력 X</p>
-        <div class="tiles" id="xin"></div>
-      </div>
-      <div class="sec">
-        <p class="lbl">출력 Y</p>
-        <div class="tiles" id="yout"></div>
-      </div>
-      <div class="sec">
-        <p class="lbl">내부 릴레이 M</p>
-        <div class="mrow8" id="mrel"></div>
-      </div>
-      <div class="sec" id="memSec" hidden>
-        <p class="lbl">타이머 · 카운터</p>
-        <div class="mrows" id="mem"></div>
-      </div>
+    <section class="panel io inputs" aria-label="입력 단자">
+      <div class="ph"><h2>입력 단자</h2><span class="sub">X0–X7</span></div>
+      <div class="sec"><div class="tiles" id="xin"></div></div>
     </section>
-
     <section class="panel ladder" aria-label="래더 프로그램">
       <div class="ph">
         <h2>래더 프로그램</h2>
@@ -327,13 +326,27 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
       <p class="curline" id="cmdStat" aria-live="polite"></p>
       <div id="rungs"></div>
     </section>
+    <section class="panel io outputs" aria-label="출력 단자">
+      <div class="ph"><h2>출력 단자</h2><span class="sub">Y0–Y15</span></div>
+      <div class="sec"><div class="tiles" id="yout"></div></div>
+    </section>
   </main>
 
+  <section class="panel memory-panel" aria-label="메모리 상태">
+    <div class="ph"><h2>메모리 상태</h2><span class="sub">내부 릴레이와 래더에서 사용 중인 타이머·카운터</span></div>
+    <div class="memory-grid">
+      <div class="mem-group"><p class="lbl">내부 릴레이 M0–M15</p><div class="mrow8" id="mrel"></div></div>
+      <div class="mem-group" id="memSec" hidden><p class="lbl">타이머 · 카운터</p><div class="mrows" id="mem"></div></div>
+    </div>
+  </section>
+
+  <dialog id="chartDialog" aria-labelledby="chartTitle">
   <section class="panel" aria-label="타임차트 예상">
     <div class="ph">
-      <h2>타임차트 예상</h2>
-      <span class="sub">입력 시나리오에 따른 출력 파형</span>
-      <button type="button" class="btn pri" id="bPredict">타임차트 예상</button>
+      <h2 id="chartTitle">타임차트</h2>
+      <span class="sub chart-subtitle">X 입력 시나리오에 따른 래더 실행 결과</span>
+      <button type="button" class="btn" id="bChartClose">닫기</button>
+      <button type="button" class="btn pri" id="bPredict">예상 실행</button>
     </div>
     <p class="curline" id="chartHint"></p>
     <div class="scenario-label" id="scenarioControls">
@@ -348,6 +361,7 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
     </div>
     <div class="legend foot"><span><i style="background:var(--in)"></i>입력 X</span><span><i style="background:var(--warn)"></i>내부·타이머·카운터</span><span><i style="background:var(--live)"></i>출력 Y</span><span>래더를 스캔 간격 50ms로 실행한 예상 상태</span></div>
   </section>
+  </dialog>
 
   <section class="panel" aria-label="명령어 리스트">
     <div class="ph">

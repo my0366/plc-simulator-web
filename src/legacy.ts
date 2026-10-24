@@ -1,150 +1,24 @@
 // @ts-nocheck
 // The renderer still uses dynamic DOM templates; its model types are being migrated incrementally.
+import {createLadderEngine} from './legacy/engine';
+import {EXAMPLES} from './legacy/examples';
+import {cloneExample, validateProgram} from './legacy/programData';
+import {createTimeChart} from './legacy/timeChart';
+import type {Program, RuntimeState} from './legacy/model';
+import {ADDRESS_COUNTS as GN, GROUPS, MAX_RUNG_COUNT as MAXR, OUTPUT_TYPES as OUT_ALLOWED} from './legacy/model';
 (function(){
 'use strict';
-type Contact={t:'NO'|'NC';a:string;_v?:boolean};
-type Output={t:'OUT'|'SET'|'RST'|'TON'|'CTU';a:string;p:number};
-type Branch={to:number;cs:Contact[];_v?:boolean;_in?:boolean[]};
-type Rung={note:string;cols:Contact[][];br?:Branch[];out?:Output|null;_prev?:boolean;_e?:boolean[];_eo?:boolean[];_cond?:boolean;_ui?:any};
-type ScanConfig={step:number;X:Record<string,string>};
-type Program={rungs:Rung[];tags:Record<string,string>;xmode:('push'|'toggle')[];scn:ScanConfig};
-type Selection={k:'c';r:number;ci:number;ki:number}|{k:'b';r:number;bi:number;ki:number}|{k:'o';r:number}|null;
-type RuntimeState={run:boolean;live:boolean;scans:number;t:number;X:boolean[];xs:boolean[];bits:Record<string,boolean>;acc:Record<string,number>;cnt:Record<string,number>;sel:Selection;pt:number[];hold:boolean[]};
-type Example={name:string;tags:Record<string,string>;xmode:('push'|'toggle')[];rungs:Rung[];scn:ScanConfig};
 const $=(id:string):any=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-const GROUPS=[['X','입력',8],['Y','출력',16],['M','내부 릴레이',16],['T','타이머',16],['C','카운터',16]];
-const GN:Record<string,number>={X:8,Y:16,M:16,T:16,C:16};
-const OUT_ALLOWED:Record<string,string>={OUT:'YM',SET:'YM',RST:'YMTC',TON:'T',CTU:'C'};
-const MAXR=40;
-const NCOL=40;
 
-/*ENGINE*/
 let prog:Program={rungs:[],tags:{},xmode:[],scn:{step:500,X:{}}};
 const ST:RuntimeState={run:true,live:false,scans:0,t:0,X:Array(8).fill(false),xs:Array(8).fill(false),bits:{},acc:{},cnt:{},sel:null,pt:[],hold:[]};
-let SIGS:string[]=[],HIST:{t:number;n:number;b:boolean[]}[]=[];
-function read(a){const g=a[0],n=+a.slice(1);if(g==='X')return !!ST.xs[n];return !!ST.bits[a];}
-function applyOut(r,dt){
-  const o=r.out;if(!o)return;
-  const a=o.a,cond=r._cond;
-  switch(o.t){
-    case 'OUT':ST.bits[a]=cond;break;
-    case 'SET':if(cond)ST.bits[a]=true;break;
-    case 'RST':if(cond){ST.bits[a]=false;if(a[0]==='C')ST.cnt[a]=0;if(a[0]==='T')ST.acc[a]=0;}break;
-    case 'TON':{const lim=o.p*100;if(cond)ST.acc[a]=Math.min((ST.acc[a]||0)+dt,lim);else ST.acc[a]=0;ST.bits[a]=cond&&ST.acc[a]>=lim;break;}
-    case 'CTU':{if(cond&&!r._prev)ST.cnt[a]=Math.min((ST.cnt[a]||0)+1,9999);ST.bits[a]=(ST.cnt[a]||0)>=o.p;r._prev=cond;break;}
-  }
-}
-function sample(){
-  if(!SIGS.length)return;
-  HIST.push({t:ST.t,n:ST.scans,b:SIGS.map(a=>read(a))});
-  while(HIST.length>240)HIST.shift();
-}
-function runScan(dt,dry,trace){
-  ST.xs=ST.X.slice();
-  ST.scans++;
-  for(const [ri,r] of prog.rungs.entries()){
-    let e=true;r._e=[];r._eo=[];
-    r.cols.forEach((col,ci)=>{
-      r._e[ci]=e;let any=false;
-      for(const c of col){const v=read(c.a);c._v=c.t==='NC'?!v:v;if(c._v)any=true;}
-      e=e&&any;
-      if(r.br)for(const b of r.br){
-        if(b.to!==ci)continue;
-        let v=true;b._in=[];
-        for(const c of b.cs){b._in.push(v);const x=read(c.a);c._v=c.t==='NC'?!x:x;v=v&&c._v;}
-        b._v=v;e=e||v;
-      }
-      r._eo[ci]=e;
-    });
-    r._cond=e;
-    applyOut(r,dt);
-    if(trace)trace(ri);
-  }
-  ST.t+=dt;
-  ST.live=true;
-  if(!dry)sample();
-}
-function runtimeReset(keepX){
-  ST.bits={};ST.acc={};ST.cnt={};ST.t=0;ST.live=false;HIST=[];
-  if(!keepX){ST.X.fill(false);ST.xs.fill(false);}
-  for(const r of prog.rungs){r._prev=false;r._e=undefined;r._eo=undefined;r._cond=false;for(const col of r.cols)for(const c of col)c._v=false;for(const b of (r.br||[])){b._v=false;b._in=[];for(const c of b.cs)c._v=false;}}
-}
-/*ENDENGINE*/
-
-/* ---------- examples ---------- */
-const k=(t,a)=>({t,a});
-const mkX=o=>{const a=Array(8).fill('toggle');for(const i in o)a[+i]=o[i];return a;};
-const pls=(...r)=>{const a=Array(NCOL).fill('0');for(const [x,y] of r)for(let i=x;i<y&&i<NCOL;i++)a[i]='1';return a.join('');};
-const EXAMPLES:Record<string,Example>={
-  selfhold:{name:'자기유지 (시작/정지)',tags:{X0:'시작',X1:'정지',Y0:'모터',Y1:'정지등'},xmode:mkX({0:'push',1:'push'}),rungs:[
-    {note:'시작을 눌렀다 놓아도 Y0가 유지되고, 정지를 누르면 꺼집니다',cols:[[k('NO','X0'),k('NO','Y0')],[k('NC','X1')]],out:{t:'OUT',a:'Y0',p:0}},
-    {note:'모터가 꺼져 있을 때 정지등 점등',cols:[[k('NC','Y0')]],out:{t:'OUT',a:'Y1',p:0}}],scn:{step:500,X:{X0:pls([4,6],[28,30]),X1:pls([20,22])}}},
-  interlock:{name:'정/역 인터록',tags:{X0:'정회전',X1:'역회전',X2:'정지',Y0:'정방향',Y1:'역방향'},xmode:mkX({0:'push',1:'push',2:'push'}),rungs:[
-    {note:'정회전: 역방향 출력 중에는 동작하지 않습니다',cols:[[k('NO','X0'),k('NO','Y0')],[k('NC','X2')],[k('NC','Y1')]],out:{t:'OUT',a:'Y0',p:0}},
-    {note:'역회전: 정방향 출력 중에는 동작하지 않습니다',cols:[[k('NO','X1'),k('NO','Y1')],[k('NC','X2')],[k('NC','Y0')]],out:{t:'OUT',a:'Y1',p:0}}],scn:{step:500,X:{X0:pls([4,6],[26,28]),X1:pls([18,20],[8,10]),X2:pls([14,16],[34,36])}}},
-  ondelay:{name:'ON 딜레이 타이머',tags:{X0:'스위치',Y0:'지연출력',Y1:'대기등'},xmode:mkX({}),rungs:[
-    {note:'X0를 켜고 3초가 지나면 T0가 완료됩니다',cols:[[k('NO','X0')]],out:{t:'TON',a:'T0',p:30}},
-    {note:'T0 완료 시 Y0 출력',cols:[[k('NO','T0')]],out:{t:'OUT',a:'Y0',p:0}},
-    {note:'기다리는 동안 대기등 점등',cols:[[k('NO','X0')],[k('NC','T0')]],out:{t:'OUT',a:'Y1',p:0}}],scn:{step:500,X:{X0:pls([4,24],[28,32])}}},
-  flicker:{name:'점멸 회로 (1초 간격)',tags:{X0:'동작',Y0:'점멸등'},xmode:mkX({}),rungs:[
-    {note:'T0: 켜져 있는 1초',cols:[[k('NO','X0')],[k('NC','T1')]],out:{t:'TON',a:'T0',p:10}},
-    {note:'T1: 꺼져 있는 1초',cols:[[k('NO','T0')]],out:{t:'TON',a:'T1',p:10}},
-    {note:'T0가 끝나기 전까지 점등',cols:[[k('NO','X0')],[k('NC','T0')]],out:{t:'OUT',a:'Y0',p:0}}],scn:{step:500,X:{X0:pls([2,36])}}},
-  counter:{name:'업 카운터 (5회)',tags:{X0:'카운트',X1:'리셋',Y0:'5회 도달'},xmode:mkX({0:'push',1:'push'}),rungs:[
-    {note:'X0를 누를 때마다(OFF→ON) 1씩 증가',cols:[[k('NO','X0')]],out:{t:'CTU',a:'C0',p:5}},
-    {note:'설정 횟수에 도달하면 Y0 출력',cols:[[k('NO','C0')]],out:{t:'OUT',a:'Y0',p:0}},
-    {note:'X1으로 카운터 리셋',cols:[[k('NO','X1')]],out:{t:'RST',a:'C0',p:0}}],scn:{step:500,X:{X0:pls([4,6],[8,10],[12,14],[16,18],[20,22]),X1:pls([30,32])}}},
-  serpar:{name:'직렬+직렬 병렬 (ORB)',tags:{X0:'A',X1:'B',X2:'C',X3:'D',Y0:'출력'},xmode:mkX({}),rungs:[
-    {note:'(X0 AND X1) 또는 (X2 AND X3)이면 Y0 출력',cols:[[k('NO','X0')],[k('NO','X1')]],br:[{to:1,cs:[k('NO','X2'),k('NO','X3')]}],out:{t:'OUT',a:'Y0',p:0}}],scn:{step:500,X:{X0:pls([4,12]),X1:pls([8,16]),X2:pls([20,28]),X3:pls([24,32])}}},
-  empty:{name:'빈 프로그램',tags:{},xmode:mkX({}),rungs:[]}
-};
+let SIGS:string[]=[];
+const engine=createLadderEngine(()=>prog,ST,()=>SIGS);
+const {runScan,runtimeReset,snapshot:snapState}=engine;
 
 /* ---------- persistence ---------- */
 const KEY='plc-ladder-sim-v1';
-function sane(p){
-  if(!p||!Array.isArray(p.rungs)||p.rungs.length>MAXR)return null;
-  const okA=a=>typeof a==='string'&&/^[XYMTC]\d+$/.test(a)&&(+a.slice(1))<GN[a[0]];
-  const rungs=[];
-  for(const r of p.rungs){
-    if(!r||!Array.isArray(r.cols)||r.cols.length>6)return null;
-    const cols=[];
-    for(const col of r.cols){
-      if(!Array.isArray(col)||!col.length||col.length>4)return null;
-      const cc=[];
-      for(const c of col){if(!c||(c.t!=='NO'&&c.t!=='NC')||!okA(c.a))return null;cc.push({t:c.t,a:c.a});}
-      cols.push(cc);
-    }
-    const br=[];
-    if(Array.isArray(r.br)&&cols.length){
-      if(r.br.length>4)return null;
-      for(const b of r.br){
-        if(!b||!Array.isArray(b.cs)||!b.cs.length||b.cs.length>6)return null;
-        const cs=[];
-        for(const c of b.cs){if(!c||(c.t!=='NO'&&c.t!=='NC')||!okA(c.a))return null;cs.push({t:c.t,a:c.a});}
-        br.push({to:Math.max(0,Math.min(cols.length-1,parseInt(b.to,10)||0)),cs});
-      }
-    }
-    let out=null;
-    if(r.out){
-      const o=r.out;
-      if(!OUT_ALLOWED[o.t]||!okA(o.a)||!OUT_ALLOWED[o.t].includes(o.a[0]))return null;
-      out={t:o.t,a:o.a,p:Math.max(0,Math.min(36000,parseInt(o.p,10)||0))};
-    }
-    rungs.push({note:String(r.note||'').slice(0,60),cols,br,out});
-  }
-  const tags={};
-  if(p.tags&&typeof p.tags==='object')for(const a in p.tags)if(okA(a))tags[a]=String(p.tags[a]).slice(0,8);
-  const xmode=Array.from({length:8},(_,i)=>(p.xmode&&p.xmode[i]==='push')?'push':'toggle');
-  const scn={step:500,X:{}};
-  if(p.scn&&typeof p.scn==='object'){
-    if([100,200,500,1000].includes(+p.scn.step))scn.step=+p.scn.step;
-    if(p.scn.X&&typeof p.scn.X==='object')for(const a in p.scn.X){
-      if(/^X[0-7]$/.test(a)&&typeof p.scn.X[a]==='string')scn.X[a]=p.scn.X[a].replace(/[^01]/g,'0').padEnd(NCOL,'0').slice(0,NCOL);
-    }
-  }
-  return {rungs,tags,xmode,scn};
-}
 const hhmm=()=>{const d=new Date(),p=n=>String(n).padStart(2,'0');return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());};
 function setSaveState(t){const el=$('saveState');if(el)el.textContent=t;}
 function snapshot(){return JSON.stringify({format:'plc-ladder-sim',version:1,savedAt:new Date().toISOString(),rungs:prog.rungs,tags:prog.tags,xmode:prog.xmode,scn:prog.scn},(key,v)=>key[0]==='_'?undefined:v,2);}
@@ -152,8 +26,8 @@ function save(){
   try{localStorage.setItem(KEY,JSON.stringify(prog,(key,v)=>key[0]==='_'?undefined:v));setSaveState('이 브라우저에 자동 저장됨 · '+hhmm());}
   catch(e){setSaveState('브라우저 저장을 쓸 수 없습니다. 파일로 저장해 두세요.');}
 }
-function loadSaved(){try{const s=localStorage.getItem(KEY);if(s)return sane(JSON.parse(s));}catch(e){}return null;}
-function cloneEx(id){const e=EXAMPLES[id];return sane(JSON.parse(JSON.stringify({rungs:e.rungs,tags:e.tags,xmode:e.xmode,scn:e.scn})));}
+function loadSaved(){try{const s=localStorage.getItem(KEY);if(s)return validateProgram(JSON.parse(s));}catch(e){}return null;}
+function cloneEx(id){return cloneExample(EXAMPLES[id]);}
 
 /* ---------- svg builders ---------- */
 function contactBody(c,W){
@@ -354,32 +228,6 @@ function selFromCell(c){
   if(d.k==='b')return {k:'b',r:+d.r,bi:+d.bi,ki:+d.ki};
   return {k:'o',r:+d.r};
 }
-function renderEditor(){}
-function renderEditorLegacy(focusId){
-  const ed=$('editor'),s=ST.sel;
-  if(!s){ed.innerHTML='<p class="ed-hint">접점이나 코일을 클릭하면 이곳에서 종류와 주소를 바꿀 수 있습니다.</p>';return;}
-  const r=prog.rungs[s.r];
-  if(s.k==='c'){
-    const col=r.cols[s.ci],c=col[s.ki];
-    ed.innerHTML=`<span class="ed-name">접점 · 렁 ${s.r+1}</span>
-      <label class="fld">종류 <select id="edT"><option value="NO"${c.t==='NO'?' selected':''}>a접점 (NO)</option><option value="NC"${c.t==='NC'?' selected':''}>b접점 (NC)</option></select></label>
-      <label class="fld">주소 <select id="edA">${addrOptions('XYMTC',c.a)}</select></label>
-      <button type="button" class="btn sm" id="edPar"${col.length>=4?' disabled':''}>병렬 추가</button>
-      <button type="button" class="btn sm" id="edSer"${r.cols.length>=6?' disabled':''}>뒤에 직렬 추가</button>
-      <button type="button" class="btn sm danger" id="edDel">삭제</button>`;
-  }else if(!r.out){
-    ed.innerHTML=`<span class="ed-name">출력 · 행 ${s.r+1}</span><span class="ed-hint">출력이 비어 있습니다. 입력줄에 <kbd>OUT Y0</kbd> 처럼 입력하거나</span><button type="button" class="btn sm" id="edAddOut">기본 코일 추가</button>`;
-  }else{
-    const o=r.out,tp=o.t==='TON'||o.t==='CTU';
-    const types=[['OUT','OUT 코일'],['SET','SET 유지'],['RST','RST 해제'],['TON','TON 온딜레이 타이머'],['CTU','CTU 업 카운터']];
-    ed.innerHTML=`<span class="ed-name">출력 · 렁 ${s.r+1}</span>
-      <label class="fld">종류 <select id="edT">${types.map(([v,l])=>`<option value="${v}"${o.t===v?' selected':''}>${l}</option>`).join('')}</select></label>
-      <label class="fld">주소 <select id="edA">${addrOptions(OUT_ALLOWED[o.t],o.a)}</select></label>
-      ${tp?`<label class="fld">${o.t==='TON'?'설정값 (0.1초 단위)':'설정 횟수'} <input id="edP" type="number" min="1" max="${o.t==='TON'?36000:9999}" value="${o.p}" inputmode="numeric"></label>
-      <span class="hint" id="edH">${o.t==='TON'?'= '+(o.p/10).toFixed(1)+'초':''}</span>`:''}`;
-  }
-  if(focusId){const f=$(focusId);if(f)f.focus();}
-}
 function setOutType(o,t){
   const prev=o.t;o.t=t;
   const al=OUT_ALLOWED[t];
@@ -476,165 +324,18 @@ function updateMem(){
   });
 }
 
-/* ---------- one-scan preview chart ---------- */
-function buildSignals(){
-  const set=new Set();
-  prog.rungs.forEach(r=>{r.cols.forEach(col=>col.forEach(c=>set.add(c.a)));(r.br||[]).forEach(b=>b.cs.forEach(c=>set.add(c.a)));if(r.out)set.add(r.out.a);});
-  const ord='XMTCY';
-  SIGS=[...set].sort((a,b)=>ord.indexOf(a[0])-ord.indexOf(b[0])||(+a.slice(1))-(+b.slice(1)));
-}
-let chartDirty=true;
-function snapState(){
-  const sv={bits:Object.assign({},ST.bits),acc:Object.assign({},ST.acc),cnt:Object.assign({},ST.cnt),xs:ST.xs.slice(),X:ST.X.slice(),t:ST.t,scans:ST.scans,live:ST.live,hist:HIST.slice()};
-  const rs=prog.rungs.map(r=>({prev:r._prev,e:r._e,eo:r._eo,cond:r._cond,
-    cv:r.cols.map(c=>c.map(x=>x._v)),
-    br:(r.br||[]).map(b=>({v:b._v,inn:b._in,cv:b.cs.map(x=>x._v)}))}));
-  return function restoreState(){
-    ST.bits=sv.bits;ST.acc=sv.acc;ST.cnt=sv.cnt;ST.xs=sv.xs;ST.t=sv.t;ST.scans=sv.scans;ST.live=sv.live;
-    HIST=sv.hist;
-    for(let i=0;i<8;i++)ST.X[i]=sv.X[i];
-    prog.rungs.forEach((r,i)=>{
-      const o=rs[i];r._prev=o.prev;r._e=o.e;r._eo=o.eo;r._cond=o.cond;
-      r.cols.forEach((c,ci)=>c.forEach((x,ki)=>{x._v=o.cv[ci][ki];}));
-      (r.br||[]).forEach((b,bi)=>{b._v=o.br[bi].v;b._in=o.br[bi].inn;b.cs.forEach((x,ki)=>{x._v=o.br[bi].cv[ki];});});
-    });
-  };
-}
-type XRole='start'|'stop'|'sensor'|'always'|'custom';
-type XScenario={role:XRole;on:string;off:string};
-type ChartResult={duration:number;times:number[];values:boolean[][]};
-const SCENARIO_KEY='plc-ladder-chart-scenario-v1';
-const ROLE_NAMES:Record<XRole,string>={start:'시작 버튼',stop:'정지 버튼',sensor:'센서',always:'항상 ON',custom:'직접 설정'};
-let scenarios:Record<string,XScenario>={};
-let chartResult:ChartResult|null=null;
-try{scenarios=JSON.parse(localStorage.getItem(SCENARIO_KEY)||'{}')||{};}catch(_){scenarios={};}
-function suggestedRole(addr:string):XRole{
-  const tag=prog.tags[addr]||'';
-  if(/시작|기동|start|run/i.test(tag))return 'start';
-  if(/정지|종료|stop|reset/i.test(tag))return 'stop';
-  if(/센서|감지|sensor|detect/i.test(tag))return 'sensor';
-  return 'custom';
-}
-function roleDefaults(role:XRole):XScenario{
-  if(role==='start')return {role,on:'0',off:'0.5'};
-  if(role==='stop')return {role,on:'5',off:'5.5'};
-  if(role==='sensor')return {role,on:'1',off:'4'};
-  if(role==='always')return {role,on:'0',off:''};
-  return {role,on:'0',off:'1'};
-}
-function persistScenarios(){try{localStorage.setItem(SCENARIO_KEY,JSON.stringify(scenarios));}catch(_){}}
-function scenarioAddresses(){return SIGS.filter(a=>a[0]==='X');}
-function renderScenarioInputs(){
-  const host=$('scenarioInputs'),addresses=scenarioAddresses();
-  if(!addresses.length){host.innerHTML='<p class="scenario-head">래더에 X 접점을 추가하면 여기에서 입력 시나리오를 설정할 수 있습니다.</p>';return;}
-  addresses.forEach(a=>{if(!scenarios[a])scenarios[a]=roleDefaults(suggestedRole(a));});
-  host.innerHTML='<div class="scenario-head"><span>X</span><span>역할</span><span>ON (초)</span><span>OFF (초)</span></div>'+addresses.map(a=>{
-    const s=scenarios[a];
-    return `<label class="scenario-row"><span class="addr">${a}</span><select data-address="${a}" data-field="role" aria-label="${a} 역할">${(['start','stop','sensor','always','custom'] as XRole[]).map(role=>`<option value="${role}" ${s.role===role?'selected':''}>${ROLE_NAMES[role]}</option>`).join('')}</select><input data-address="${a}" data-field="on" type="number" min="0" max="60" step="0.1" value="${esc(s.on)}" aria-label="${a} ON 시각 초" title="ON 시각(초)"><input data-address="${a}" data-field="off" type="number" min="0" max="60" step="0.1" value="${esc(s.off)}" placeholder="끝까지" aria-label="${a} OFF 시각 초" title="OFF 시각(초)"></label>`;
-  }).join('');
-  persistScenarios();
-}
-function invalidateChart(message='입력 일정 또는 래더가 바뀌었습니다. 타임차트를 다시 예상해 주세요.'){
-  chartResult=null;chartDirty=true;$('chartHint').textContent=message;refresh();
-}
-function runPrediction(){
-  const duration=Math.min(60,Math.max(1,Number($('simDuration').value)||10));$('simDuration').value=String(duration);
-  const addresses=scenarioAddresses(),inputs:Record<string,{on:number;off:number|null}>={};
-  for(const addr of addresses){
-    const s=scenarios[addr]||roleDefaults(suggestedRole(addr));
-    const on=Math.min(duration,Math.max(0,Number(s.on)||0));
-    const off=s.off.trim()===''?null:Math.min(duration,Math.max(0,Number(s.off)));
-    inputs[addr]={on,off};
-  }
-  const restore=snapState(),dt=50,times:number[]=[],values:boolean[][]=[];
-  try{
-    runtimeReset(false);
-    ST.scans=0;ST.t=0;
-    for(let elapsed=0;elapsed<=duration*1000;elapsed+=dt){
-      for(const addr of addresses){
-        const event=inputs[addr];
-        const on=elapsed>=event.on*1000&&(event.off===null||elapsed<event.off*1000);
-        ST.X[+addr.slice(1)]=on;
-      }
-      if(elapsed>0)runScan(dt,true);
-      else ST.xs=ST.X.slice();
-      times.push(elapsed);values.push(SIGS.map(a=>read(a)));
-    }
-  }finally{restore();}
-  chartResult={duration,times,values};chartDirty=true;
-  $('chartHint').textContent=`${duration}초 동안 X 입력 일정대로 50ms 간격으로 래더를 실행한 예상입니다. 입력 X 외의 신호는 초기 OFF 상태에서 시작합니다.`;
-  drawChart();
-}
-function drawChart(){
-  chartDirty=false;
-  const cv=$('cv'),wrap=cv.parentElement,n=SIGS.length;
-  $('chartEmpty').hidden=!!chartResult&&n>0;cv.hidden=!chartResult||n===0;
-  if(!chartResult||!n){
-    $('chartEmpty').textContent=n?'X 역할과 ON/OFF 시각을 지정하고 “타임차트 예상”을 누르세요.':'래더에 X 접점을 추가하면 입력 일정을 설정할 수 있습니다.';
-    if(n)$('chartHint').textContent='X 입력 역할과 시간을 설정한 뒤 타임차트 예상 버튼을 누르세요.';
-    return;
-  }
-  const sim=chartResult,dpr=window.devicePixelRatio||1,avail=Math.max(280,wrap.clientWidth-28);
-  const left=134,right=20,top=32,bottom=30,rowH=36,plotW=Math.max(700,avail-left-right),w=left+plotW+right,h=top+n*rowH+bottom;
-  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){
-    cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);cv.style.width=w+'px';cv.style.height=h+'px';
-  }
-  cv.style.touchAction='pan-x pan-y';
-  const ctx=cv.getContext('2d');if(!ctx)return;
-  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
-  const cs=getComputedStyle(document.documentElement),tok=name=>cs.getPropertyValue(name).trim();
-  const cLine=tok('--line'),cInk=tok('--ink'),cInk2=tok('--ink-2');
-  const colors={X:tok('--in'),Y:tok('--live'),M:tok('--warn'),T:tok('--warn'),C:tok('--warn')};
-  const mono=tok('--mono'),sans=tok('--sans'),plotX=left,plotY=top,sx=(t:number)=>plotX+plotW*t/sim.duration;
-  ctx.font='400 11px '+mono;ctx.textAlign='center';ctx.textBaseline='alphabetic';
-  for(let sec=0;sec<=sim.duration;sec++){
-    const x=Math.round(sx(sec))+.5;ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,plotY-8);ctx.lineTo(x,plotY+n*rowH);ctx.stroke();
-    ctx.fillStyle=cInk2;ctx.fillText(`${sec}s`,x,plotY+n*rowH+18);
-  }
-  SIGS.forEach((addr,i)=>{
-    const y=plotY+i*rowH,hi=y+8,lo=y+rowH-8;
-    ctx.strokeStyle=cLine;ctx.beginPath();ctx.moveTo(0,y+rowH-.5);ctx.lineTo(w,y+rowH-.5);ctx.stroke();
-    ctx.textAlign='left';ctx.fillStyle=cInk;ctx.font='600 12px '+mono;ctx.fillText(addr,8,y+rowH/2+4);
-    const tag=prog.tags[addr];if(tag){ctx.fillStyle=cInk2;ctx.font='400 11px '+sans;ctx.fillText(tag,43,y+rowH/2+4,left-48);}
-    ctx.strokeStyle=colors[addr[0]];ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.beginPath();
-    sim.values.forEach((row,k)=>{
-      const x=sx(sim.times[k]/1000),level=row[i]?hi:lo;
-      if(k===0)ctx.moveTo(x,level);
-      else{const prev=sim.values[k-1][i],prevY=prev?hi:lo;ctx.lineTo(x,prevY);if(prev!==row[i])ctx.lineTo(x,level);}
-    });
-    ctx.stroke();
-  });
-}
-const scenarioHost=$('scenarioInputs');
-scenarioHost.addEventListener('change',e=>{
-  const el=e.target as HTMLInputElement|HTMLSelectElement,addr=el.dataset.address,field=el.dataset.field;
-  if(!addr||!field)return;
-  if(field==='role')scenarios[addr]=roleDefaults(el.value as XRole);
-  else scenarios[addr]={...(scenarios[addr]||roleDefaults(suggestedRole(addr))),[field]:el.value};
-  persistScenarios();renderScenarioInputs();invalidateChart();
-});
-scenarioHost.addEventListener('input',e=>{
-  const el=e.target as HTMLInputElement,addr=el.dataset.address,field=el.dataset.field;
-  if(!addr||!field||field==='role')return;
-  scenarios[addr]={...(scenarios[addr]||roleDefaults(suggestedRole(addr))),[field]:el.value};persistScenarios();invalidateChart();
-});
-$('simDuration').addEventListener('input',()=>invalidateChart());
-$('bPredict').addEventListener('click',runPrediction);
-renderScenarioInputs();
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>drawChart());
-
 /* ---------- commit / refresh ---------- */
 function refresh(){
-  updateFlow();updateIO();updateMem();if(chartDirty){chartDirty=false;drawChart();}
+  updateFlow();updateIO();updateMem();chart.drawIfDirty();
   $('scanCnt').textContent='SCAN '+ST.scans;
   $('led').classList.toggle('on',ST.run);
 }
+const chart=createTimeChart({getProgram:()=>prog,getSignals:()=>SIGS,setSignals:signals=>{SIGS=signals;},state:ST,runScan,runtimeReset,snapshot:snapState,refresh});
 function commit(reset){
-  chartDirty=true;chartResult=null;
   prog.rungs.forEach(normBr);
   record();
   if(reset!==false)runtimeReset(true);
-  validSel();buildSignals();renderScenarioInputs();renderLadder();applySel();renderEditor();renderIO();renderMem();renderIL();save();refresh();
+  validSel();chart.programChanged();renderLadder();applySel();renderIO();renderMem();renderIL();save();refresh();
 }
 
 /* ---------- instruction list (GX Works2 리스트 표시 형식) ---------- */
@@ -733,7 +434,7 @@ $('fOpen').addEventListener('change',e=>{
   const rd=new FileReader();
   rd.onload=()=>{
     let p=null;
-    try{p=sane(JSON.parse(String(rd.result)));}catch(_){}
+    try{p=validateProgram(JSON.parse(String(rd.result)));}catch(_){}
     if(!p){setSaveState('이 도구에서 저장한 .json 파일이 아니거나 내용을 읽을 수 없습니다.');return;}
     askReplace(f.name,p);
   };
@@ -754,7 +455,7 @@ $('rungs').addEventListener('click',e=>{
   if(cell){
     ST.sel=selFromCell(cell);
     setEdit(false);$('cmd').value='';
-    applySel();renderEditor();return;
+    applySel();return;
   }
   const b=e.target.closest('[data-act]');if(!b||b.disabled)return;
   const ri=+b.dataset.r,r=prog.rungs[ri],act=b.dataset.act;
@@ -790,7 +491,7 @@ function record(){
 }
 function restore(s){
   let o;try{o=JSON.parse(s);}catch(_){return;}
-  const p=sane({rungs:o.rungs,tags:o.tags,xmode:prog.xmode,scn:prog.scn});
+  const p=validateProgram({rungs:o.rungs,tags:o.tags,xmode:prog.xmode,scn:prog.scn});
   if(!p)return;
   prog=p;lastSnap=s;restoring=true;
   try{commit(true);}finally{restoring=false;}
@@ -885,7 +586,7 @@ function configDlg(mode,init){
     cmd.placeholder='예) LD X0';
     cmd.removeAttribute('maxlength');
     cmd.value=mode==='edit'?cellText(s):(init||'');
-    $('dlgHint').textContent=mode==='edit'?'Enter로 적용하면 창이 닫힙니다.':'Enter로 입력하면 창이 열린 채 다음 명령어를 받습니다. 한글 입력 상태에서도 알파벳 키로 인식합니다.';
+    $('dlgHint').textContent=mode==='edit'?'Enter로 적용하면 창이 닫힙니다.':'Enter로 입력하면 창이 열린 채 다음 명령어를 받습니다. 명령어는 영문 입력 상태에서 입력하세요.';
   }
 }
 function openDlg(mode,init){
@@ -1071,11 +772,7 @@ dlg.addEventListener('close',()=>{
 });
 cmd.addEventListener('keydown',e=>{
   const mod=e.metaKey||e.ctrlKey,cmdMode=dlgMode!=='note';
-  if(cmdMode&&!mod&&!e.altKey&&/^Key[A-Z]$/.test(e.code)&&(e.isComposing||e.key==='Process'||/[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(e.key))){
-    e.preventDefault();
-    cmd.setRangeText(e.code.slice(3),cmd.selectionStart,cmd.selectionEnd,'end');
-    return;
-  }
+  if(e.isComposing||e.key==='Process')return;
   if(cmdMode&&mod&&e.code==='KeyZ'&&!cmd.value.trim()){e.preventDefault();if(e.shiftKey)redo();else undo();return;}
   if(cmdMode&&mod&&e.code==='KeyY'){e.preventDefault();redo();return;}
   if(cmdMode&&(e.key==='ArrowUp'||e.key==='ArrowDown')&&!mod&&!e.altKey&&!e.shiftKey&&cmdHist.length){
@@ -1145,7 +842,6 @@ $('bReset').addEventListener('click',()=>{
     if(id&&EXAMPLES[id])askReplace(EXAMPLES[id].name,cloneEx(id));
   });
 })();
-window.addEventListener('resize',drawChart);
 
 /* ---------- main loop ---------- */
 let last=performance.now();
