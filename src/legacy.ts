@@ -13,8 +13,8 @@ type RuntimeState={run:boolean;live:boolean;scans:number;t:number;X:boolean[];xs
 type Example={name:string;tags:Record<string,string>;xmode:('push'|'toggle')[];rungs:Rung[];scn:ScanConfig};
 const $=(id:string):any=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
-const GROUPS=[['X','입력',8],['Y','출력',8],['M','내부 릴레이',8],['T','타이머',4],['C','카운터',4]];
-const GN:Record<string,number>={X:8,Y:8,M:8,T:4,C:4};
+const GROUPS=[['X','입력',8],['Y','출력',16],['M','내부 릴레이',16],['T','타이머',16],['C','카운터',16]];
+const GN:Record<string,number>={X:8,Y:16,M:16,T:16,C:16};
 const OUT_ALLOWED:Record<string,string>={OUT:'YM',SET:'YM',RST:'YMTC',TON:'T',CTU:'C'};
 const MAXR=40;
 const NCOL=40;
@@ -104,7 +104,7 @@ const EXAMPLES:Record<string,Example>={
 const KEY='plc-ladder-sim-v1';
 function sane(p){
   if(!p||!Array.isArray(p.rungs)||p.rungs.length>MAXR)return null;
-  const okA=a=>typeof a==='string'&&/^[XYMTC]\d$/.test(a)&&(+a.slice(1))<GN[a[0]];
+  const okA=a=>typeof a==='string'&&/^[XYMTC]\d+$/.test(a)&&(+a.slice(1))<GN[a[0]];
   const rungs=[];
   for(const r of p.rungs){
     if(!r||!Array.isArray(r.cols)||r.cols.length>6)return null;
@@ -398,10 +398,10 @@ function renderIO(){
   }
   $('xin').innerHTML=h;
   h='';
-  for(let i=0;i<8;i++)h+=`<div class="lamp" data-i="${i}"><span class="bulb"></span><span class="ad">Y${i}</span><span class="tg">${esc(prog.tags['Y'+i]||'')}</span></div>`;
+  for(let i=0;i<GN.Y;i++)h+=`<div class="lamp" data-i="${i}"><span class="bulb"></span><span class="ad">Y${i}</span><span class="tg">${esc(prog.tags['Y'+i]||'')}</span></div>`;
   $('yout').innerHTML=h;
   h='';
-  for(let i=0;i<8;i++)h+=`<span class="mdot" title="M${i}"><i></i>M${i}</span>`;
+  for(let i=0;i<GN.M;i++)h+=`<span class="mdot" title="M${i}"><i></i>M${i}</span>`;
   $('mrel').innerHTML=h;
   IO.x=[...$('xin').querySelectorAll('.xin')];
   IO.y=[...$('yout').querySelectorAll('.lamp')];
@@ -1123,7 +1123,7 @@ function setRun(run){
   $('bStop').setAttribute('aria-pressed',run?'false':'true');
   $('bStep').disabled=run;
   if(!run){
-    for(let i=0;i<8;i++)ST.bits['Y'+i]=false;
+    for(let i=0;i<GN.Y;i++)ST.bits['Y'+i]=false;
     ST.live=false;
   }
   last=performance.now();
@@ -1134,7 +1134,7 @@ $('bStop').addEventListener('click',()=>setRun(false));
 $('bStep').addEventListener('click',()=>{if(!ST.run){runScan(100);refresh();}});
 $('bReset').addEventListener('click',()=>{
   ST.hold.fill(false);runtimeReset(false);ST.scans=0;
-  if(!ST.run){for(let i=0;i<8;i++)ST.bits['Y'+i]=false;}
+  if(!ST.run){for(let i=0;i<GN.Y;i++)ST.bits['Y'+i]=false;}
   refresh();
 });
 (function(){

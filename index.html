@@ -114,7 +114,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visi
 .lamp{display:flex;flex-direction:column;align-items:center;gap:5px;padding:7px 4px 6px;min-width:0}
 .bulb{width:28px;height:28px;border-radius:50%;background:var(--panel-2);border:2px solid var(--wire);transition:background .08s,box-shadow .08s}
 .lamp.on .bulb{background:var(--lamp);border-color:var(--lamp);box-shadow:0 0 0 4px var(--lamp-glow),0 0 16px 2px var(--lamp-glow)}
-.mrow8{display:grid;grid-template-columns:repeat(8,1fr);gap:6px}
+.mrow8{display:grid;grid-template-columns:repeat(auto-fit,minmax(28px,1fr));gap:8px 6px}
 .mdot{display:flex;flex-direction:column;align-items:center;gap:3px;font:500 11px var(--mono);color:var(--ink-2)}
 .mdot i{width:18px;height:10px;border-radius:2px;background:var(--panel-2);border:1px solid var(--wire)}
 .mdot.on i{background:var(--live);border-color:var(--live)}
@@ -278,6 +278,7 @@ dialog::backdrop{background:rgba(8,14,20,.55)}
     <summary>사용법 · 명령어 · 단축키</summary>
     <ul>
       <li><b>명령어 입력</b> 입력 창에 <kbd>LD X0</kbd> 처럼 쓰고 Enter를 누릅니다. 창은 열린 채로 다음 명령어를 받고, Esc로 닫습니다. <kbd>LD</kbd>/<kbd>LDI</kbd> 첫 접점, <kbd>AND</kbd>/<kbd>ANI</kbd> 직렬, <kbd>OR</kbd>/<kbd>ORI</kbd> 병렬, <kbd>OUT</kbd>/<kbd>SET</kbd>/<kbd>RST</kbd> 출력. 타이머와 카운터는 <kbd>OUT T0 K30</kbd>(3초), <kbd>OUT C0 K5</kbd>(5회)처럼 입력합니다.</li>
+      <li>주소 범위는 입력 <kbd>X0~X7</kbd>, 출력 <kbd>Y0~Y15</kbd>, 내부 릴레이 <kbd>M0~M15</kbd>, 타이머 <kbd>T0~T15</kbd>, 카운터 <kbd>C0~C15</kbd>입니다.</li>
       <li><b>직렬끼리 병렬 연결</b> 먼저 <kbd>LD X0</kbd> → <kbd>AND X1</kbd>으로 위쪽 회로를 만들고, <kbd>LD X2</kbd> → <kbd>AND X3</kbd>으로 아래쪽 가지를 만든 뒤 <kbd>ORB</kbd>로 합칩니다. 이어서 <kbd>OUT Y0</kbd>을 입력하면 한 출력으로 모입니다. 접점 하나만 병렬로 붙일 때는 <kbd>OR Y0</kbd>(지금까지의 회로 전체와 병렬)을 씁니다.</li>
       <li><b>행 추가</b> <kbd>⌘</kbd> 또는 <kbd>Ctrl</kbd> + <kbd>Enter</kbd>로 현재 행 아래에 빈 행을 만들고, 바로 명령어를 이어서 입력합니다. 예: <kbd>LD X0</kbd> → <kbd>OR Y0</kbd> → <kbd>ANI X1</kbd> → <kbd>OUT Y0</kbd>.</li>
       <li><b>이동·수정</b> 방향키로 커서를 옮기고, 접점 위에서 Enter(또는 더블클릭)를 누르면 입력 창에 명령어가 채워져 그 자리를 수정합니다. <kbd>Delete</kbd> 삭제, <kbd>⌘/Ctrl</kbd> + <kbd>Backspace</kbd> 현재 행 삭제. 커서가 래더 위에 있을 때 영문자를 치면 입력 창이 열립니다.</li>
