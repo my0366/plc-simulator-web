@@ -411,7 +411,6 @@ function updateIO(){
   IO.x.forEach((el,i)=>{const on=ST.X[i];el.classList.toggle('on',on);el.setAttribute('aria-pressed',on?'true':'false');});
   IO.y.forEach((el,i)=>el.classList.toggle('on',!!ST.bits['Y'+i]));
   IO.m.forEach((el,i)=>el.classList.toggle('on',!!ST.bits['M'+i]));
-  chartDirty=true;
 }
 function press(i){ST.hold[i]=true;ST.X[i]=true;ST.pt[i]=performance.now();updateIO();refresh();}
 function release(i){
@@ -486,12 +485,13 @@ function buildSignals(){
 }
 let chartDirty=true;
 function snapState(){
-  const sv={bits:Object.assign({},ST.bits),acc:Object.assign({},ST.acc),cnt:Object.assign({},ST.cnt),xs:ST.xs.slice(),X:ST.X.slice(),t:ST.t,scans:ST.scans,live:ST.live};
+  const sv={bits:Object.assign({},ST.bits),acc:Object.assign({},ST.acc),cnt:Object.assign({},ST.cnt),xs:ST.xs.slice(),X:ST.X.slice(),t:ST.t,scans:ST.scans,live:ST.live,hist:HIST.slice()};
   const rs=prog.rungs.map(r=>({prev:r._prev,e:r._e,eo:r._eo,cond:r._cond,
     cv:r.cols.map(c=>c.map(x=>x._v)),
     br:(r.br||[]).map(b=>({v:b._v,inn:b._in,cv:b.cs.map(x=>x._v)}))}));
   return function restoreState(){
     ST.bits=sv.bits;ST.acc=sv.acc;ST.cnt=sv.cnt;ST.xs=sv.xs;ST.t=sv.t;ST.scans=sv.scans;ST.live=sv.live;
+    HIST=sv.hist;
     for(let i=0;i<8;i++)ST.X[i]=sv.X[i];
     prog.rungs.forEach((r,i)=>{
       const o=rs[i];r._prev=o.prev;r._e=o.e;r._eo=o.eo;r._cond=o.cond;
@@ -500,27 +500,82 @@ function snapState(){
     });
   };
 }
-/* 현재 X 입력과 내부 상태를 보존한 채 다음 스캔을 계산해 렁마다 신호 상태를 기록 */
-function traceScan(dt){
-  const start=SIGS.map(a=>a[0]==='X'?!!ST.X[+a.slice(1)]:!!ST.bits[a]);
-  const rest=snapState();
-  const steps=[],conds=[];
-  try{
-    runScan(dt,true,ri=>{steps.push(SIGS.map(a=>read(a)));conds.push(!!prog.rungs[ri]._cond);});
-  }finally{rest();}
-  return {start,steps,conds};
+type XRole='start'|'stop'|'sensor'|'always'|'custom';
+type XScenario={role:XRole;on:string;off:string};
+type ChartResult={duration:number;times:number[];values:boolean[][]};
+const SCENARIO_KEY='plc-ladder-chart-scenario-v1';
+const ROLE_NAMES:Record<XRole,string>={start:'시작 버튼',stop:'정지 버튼',sensor:'센서',always:'항상 ON',custom:'직접 설정'};
+let scenarios:Record<string,XScenario>={};
+let chartResult:ChartResult|null=null;
+try{scenarios=JSON.parse(localStorage.getItem(SCENARIO_KEY)||'{}')||{};}catch(_){scenarios={};}
+function suggestedRole(addr:string):XRole{
+  const tag=prog.tags[addr]||'';
+  if(/시작|기동|start|run/i.test(tag))return 'start';
+  if(/정지|종료|stop|reset/i.test(tag))return 'stop';
+  if(/센서|감지|sensor|detect/i.test(tag))return 'sensor';
+  return 'custom';
 }
-function chartHintText(){
-  return '현재 X 입력 상태를 기준으로 다음 1회 스캔을 미리 계산합니다. 신호 변화는 래더를 위에서 아래로 실행하는 순서로 표시됩니다.';
+function roleDefaults(role:XRole):XScenario{
+  if(role==='start')return {role,on:'0',off:'0.5'};
+  if(role==='stop')return {role,on:'5',off:'5.5'};
+  if(role==='sensor')return {role,on:'1',off:'4'};
+  if(role==='always')return {role,on:'0',off:''};
+  return {role,on:'0',off:'1'};
+}
+function persistScenarios(){try{localStorage.setItem(SCENARIO_KEY,JSON.stringify(scenarios));}catch(_){}}
+function scenarioAddresses(){return SIGS.filter(a=>a[0]==='X');}
+function renderScenarioInputs(){
+  const host=$('scenarioInputs'),addresses=scenarioAddresses();
+  if(!addresses.length){host.innerHTML='<p class="scenario-head">래더에 X 접점을 추가하면 여기에서 입력 시나리오를 설정할 수 있습니다.</p>';return;}
+  addresses.forEach(a=>{if(!scenarios[a])scenarios[a]=roleDefaults(suggestedRole(a));});
+  host.innerHTML='<div class="scenario-head"><span>X</span><span>역할</span><span>ON (초)</span><span>OFF (초)</span></div>'+addresses.map(a=>{
+    const s=scenarios[a];
+    return `<label class="scenario-row"><span class="addr">${a}</span><select data-address="${a}" data-field="role" aria-label="${a} 역할">${(['start','stop','sensor','always','custom'] as XRole[]).map(role=>`<option value="${role}" ${s.role===role?'selected':''}>${ROLE_NAMES[role]}</option>`).join('')}</select><input data-address="${a}" data-field="on" type="number" min="0" max="60" step="0.1" value="${esc(s.on)}" aria-label="${a} ON 시각 초" title="ON 시각(초)"><input data-address="${a}" data-field="off" type="number" min="0" max="60" step="0.1" value="${esc(s.off)}" placeholder="끝까지" aria-label="${a} OFF 시각 초" title="OFF 시각(초)"></label>`;
+  }).join('');
+  persistScenarios();
+}
+function invalidateChart(message='입력 일정 또는 래더가 바뀌었습니다. 타임차트를 다시 예상해 주세요.'){
+  chartResult=null;chartDirty=true;$('chartHint').textContent=message;refresh();
+}
+function runPrediction(){
+  const duration=Math.min(60,Math.max(1,Number($('simDuration').value)||10));$('simDuration').value=String(duration);
+  const addresses=scenarioAddresses(),inputs:Record<string,{on:number;off:number|null}>={};
+  for(const addr of addresses){
+    const s=scenarios[addr]||roleDefaults(suggestedRole(addr));
+    const on=Math.min(duration,Math.max(0,Number(s.on)||0));
+    const off=s.off.trim()===''?null:Math.min(duration,Math.max(0,Number(s.off)));
+    inputs[addr]={on,off};
+  }
+  const restore=snapState(),dt=50,times:number[]=[],values:boolean[][]=[];
+  try{
+    runtimeReset(false);
+    ST.scans=0;ST.t=0;
+    for(let elapsed=0;elapsed<=duration*1000;elapsed+=dt){
+      for(const addr of addresses){
+        const event=inputs[addr];
+        const on=elapsed>=event.on*1000&&(event.off===null||elapsed<event.off*1000);
+        ST.X[+addr.slice(1)]=on;
+      }
+      if(elapsed>0)runScan(dt,true);
+      else ST.xs=ST.X.slice();
+      times.push(elapsed);values.push(SIGS.map(a=>read(a)));
+    }
+  }finally{restore();}
+  chartResult={duration,times,values};chartDirty=true;
+  $('chartHint').textContent=`${duration}초 동안 X 입력 일정대로 50ms 간격으로 래더를 실행한 예상입니다. 입력 X 외의 신호는 초기 OFF 상태에서 시작합니다.`;
+  drawChart();
 }
 function drawChart(){
+  chartDirty=false;
   const cv=$('cv'),wrap=cv.parentElement,n=SIGS.length;
-  $('chartEmpty').hidden=n>0;cv.hidden=n===0;
-  $('chartHint').textContent=chartHintText();
-  if(!n)return;
-  const sim=traceScan(50),dpr=window.devicePixelRatio||1,avail=Math.max(260,wrap.clientWidth-28);
-  const R=prog.rungs.length,slots=R+2,rowH=38,top=58,left=avail<520?104:142,right=12;
-  const minSlot=70,w=Math.max(avail,left+slots*minSlot+right),h=top+n*rowH+8;
+  $('chartEmpty').hidden=!!chartResult&&n>0;cv.hidden=!chartResult||n===0;
+  if(!chartResult||!n){
+    $('chartEmpty').textContent=n?'X 역할과 ON/OFF 시각을 지정하고 “타임차트 예상”을 누르세요.':'래더에 X 접점을 추가하면 입력 일정을 설정할 수 있습니다.';
+    if(n)$('chartHint').textContent='X 입력 역할과 시간을 설정한 뒤 타임차트 예상 버튼을 누르세요.';
+    return;
+  }
+  const sim=chartResult,dpr=window.devicePixelRatio||1,avail=Math.max(280,wrap.clientWidth-28);
+  const left=134,right=20,top=32,bottom=30,rowH=36,plotW=Math.max(700,avail-left-right),w=left+plotW+right,h=top+n*rowH+bottom;
   if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){
     cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);cv.style.width=w+'px';cv.style.height=h+'px';
   }
@@ -528,37 +583,44 @@ function drawChart(){
   const ctx=cv.getContext('2d');if(!ctx)return;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
   const cs=getComputedStyle(document.documentElement),tok=name=>cs.getPropertyValue(name).trim();
-  const cLine=tok('--line'),cInk=tok('--ink'),cInk2=tok('--ink-2'),cLive=tok('--live'),cSel=tok('--sel');
-  const cX={X:tok('--in'),Y:tok('--live'),M:tok('--warn'),T:tok('--warn'),C:tok('--warn')};
-  const mono=tok('--mono'),sans=tok('--sans'),x0=left,x1=w-right,cw=(x1-x0)/slots,sx=slot=>x0+slot*cw;
-  for(let k=0;k<=slots;k++){
-    const x=Math.round(sx(k))+.5;ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,top-12);ctx.lineTo(x,h-4);ctx.stroke();
+  const cLine=tok('--line'),cInk=tok('--ink'),cInk2=tok('--ink-2');
+  const colors={X:tok('--in'),Y:tok('--live'),M:tok('--warn'),T:tok('--warn'),C:tok('--warn')};
+  const mono=tok('--mono'),sans=tok('--sans'),plotX=left,plotY=top,sx=(t:number)=>plotX+plotW*t/sim.duration;
+  ctx.font='400 11px '+mono;ctx.textAlign='center';ctx.textBaseline='alphabetic';
+  for(let sec=0;sec<=sim.duration;sec++){
+    const x=Math.round(sx(sec))+.5;ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,plotY-8);ctx.lineTo(x,plotY+n*rowH);ctx.stroke();
+    ctx.fillStyle=cInk2;ctx.fillText(`${sec}s`,x,plotY+n*rowH+18);
   }
-  ctx.textBaseline='alphabetic';ctx.textAlign='center';
-  const heading=(slot,title,sub,active)=>{
-    const cx=sx(slot)+cw/2;ctx.textAlign='center';ctx.font=(active?'700':'600')+' 13px '+mono;ctx.fillStyle=active?cLive:cInk;ctx.fillText(title,cx,22,cw-4);
-    ctx.font='400 11px '+sans;ctx.fillStyle=cInk2;ctx.fillText(sub,cx,42,cw-4);
-  };
-  heading(0,'시작','현재 상태',false);
-  prog.rungs.forEach((r,i)=>heading(i+1,'R'+(i+1),r.out?r.out.a:'조건 확인',!!sim.conds[i]));
-  heading(R+1,'예상','1스캔 후',false);
-  SIGS.forEach((a,i)=>{
-    const y0=top+i*rowH,hi=y0+9,lo=y0+rowH-9;
-    ctx.strokeStyle=cLine;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,y0+rowH-.5);ctx.lineTo(w,y0+rowH-.5);ctx.stroke();
-    ctx.textAlign='left';ctx.fillStyle=cInk;ctx.font='600 14px '+mono;ctx.fillText(a,8,y0+rowH/2+5);
-    const tag=prog.tags[a];if(tag){ctx.fillStyle=cInk2;ctx.font='400 12px '+sans;ctx.fillText(tag,40,y0+rowH/2+5,left-48);}
-    const last=sim.steps.length?sim.steps[sim.steps.length-1][i]:sim.start[i];
-    const values=[sim.start[i],...sim.steps.map(step=>step[i]),last];
-    ctx.strokeStyle=cX[a[0]];ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.beginPath();
-    values.forEach((value,k)=>{
-      const y=value?hi:lo,xa=sx(k),xb=sx(k+1);
-      if(k===0)ctx.moveTo(xa,y);else{ctx.lineTo(xa,values[k-1]?hi:lo);ctx.lineTo(xa,y);}
-      ctx.lineTo(xb,y);
+  SIGS.forEach((addr,i)=>{
+    const y=plotY+i*rowH,hi=y+8,lo=y+rowH-8;
+    ctx.strokeStyle=cLine;ctx.beginPath();ctx.moveTo(0,y+rowH-.5);ctx.lineTo(w,y+rowH-.5);ctx.stroke();
+    ctx.textAlign='left';ctx.fillStyle=cInk;ctx.font='600 12px '+mono;ctx.fillText(addr,8,y+rowH/2+4);
+    const tag=prog.tags[addr];if(tag){ctx.fillStyle=cInk2;ctx.font='400 11px '+sans;ctx.fillText(tag,43,y+rowH/2+4,left-48);}
+    ctx.strokeStyle=colors[addr[0]];ctx.lineWidth=2.5;ctx.lineJoin='round';ctx.beginPath();
+    sim.values.forEach((row,k)=>{
+      const x=sx(sim.times[k]/1000),level=row[i]?hi:lo;
+      if(k===0)ctx.moveTo(x,level);
+      else{const prev=sim.values[k-1][i],prevY=prev?hi:lo;ctx.lineTo(x,prevY);if(prev!==row[i])ctx.lineTo(x,level);}
     });
-    ctx.stroke();ctx.fillStyle=cSel;
-    for(let k=1;k<values.length;k++)if(values[k]!==values[k-1]){ctx.beginPath();ctx.arc(sx(k),values[k]?hi:lo,3.5,0,Math.PI*2);ctx.fill();}
+    ctx.stroke();
   });
 }
+const scenarioHost=$('scenarioInputs');
+scenarioHost.addEventListener('change',e=>{
+  const el=e.target as HTMLInputElement|HTMLSelectElement,addr=el.dataset.address,field=el.dataset.field;
+  if(!addr||!field)return;
+  if(field==='role')scenarios[addr]=roleDefaults(el.value as XRole);
+  else scenarios[addr]={...(scenarios[addr]||roleDefaults(suggestedRole(addr))),[field]:el.value};
+  persistScenarios();renderScenarioInputs();invalidateChart();
+});
+scenarioHost.addEventListener('input',e=>{
+  const el=e.target as HTMLInputElement,addr=el.dataset.address,field=el.dataset.field;
+  if(!addr||!field||field==='role')return;
+  scenarios[addr]={...(scenarios[addr]||roleDefaults(suggestedRole(addr))),[field]:el.value};persistScenarios();invalidateChart();
+});
+$('simDuration').addEventListener('input',()=>invalidateChart());
+$('bPredict').addEventListener('click',runPrediction);
+renderScenarioInputs();
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>drawChart());
 
 /* ---------- commit / refresh ---------- */
@@ -568,11 +630,11 @@ function refresh(){
   $('led').classList.toggle('on',ST.run);
 }
 function commit(reset){
-  chartDirty=true;
+  chartDirty=true;chartResult=null;
   prog.rungs.forEach(normBr);
   record();
   if(reset!==false)runtimeReset(true);
-  validSel();buildSignals();renderLadder();applySel();renderEditor();renderIO();renderMem();renderIL();save();refresh();
+  validSel();buildSignals();renderScenarioInputs();renderLadder();applySel();renderEditor();renderIO();renderMem();renderIL();save();refresh();
 }
 
 /* ---------- instruction list (GX Works2 리스트 표시 형식) ---------- */
