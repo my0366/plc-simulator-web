@@ -34,5 +34,5 @@ export const EXAMPLES:Record<string,Example>={
     {note:'X1으로 카운터 리셋',cols:[[contact('NO','X1')]],out:{t:'RST',a:'C0',p:0}}],scn:{step:500,X:{X0:inputWave([4,6],[8,10],[12,14],[16,18],[20,22]),X1:inputWave([30,32])}}},
   serpar:{name:'직렬+직렬 병렬 (ORB)',tags:{X0:'A',X1:'B',X2:'C',X3:'D',Y0:'출력'},xmode:inputModes({}),rungs:[
     {note:'(X0 AND X1) 또는 (X2 AND X3)이면 Y0 출력',cols:[[contact('NO','X0')],[contact('NO','X1')]],br:[{to:1,cs:[contact('NO','X2'),contact('NO','X3')]}],out:{t:'OUT',a:'Y0',p:0}}],scn:{step:500,X:{X0:inputWave([4,12]),X1:inputWave([8,16]),X2:inputWave([20,28]),X3:inputWave([24,32])}}},
-  empty:{name:'빈 프로그램',tags:{},xmode:inputModes({}),rungs:[]}
+  empty:{name:'빈 프로그램',tags:{},xmode:inputModes({}),rungs:[],scn:{step:500,X:{}}}
 };
